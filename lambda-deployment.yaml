@@ -1,0 +1,204 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Production Content Moderation Lambda Function with S3 deployment'
+
+Parameters:
+  FunctionName:
+    Type: String
+    Default: production-content-moderation
+    Description: Name of the Lambda function
+
+  S3Bucket:
+    Type: String
+    Description: S3 bucket containing the Lambda deployment package
+
+  S3Key:
+    Type: String
+    Default: lambda-function.zip
+    Description: S3 key for the Lambda deployment package
+
+  LayerArn:
+    Type: String
+    Description: ARN of the Lambda layer containing dependencies
+
+  DBSecretName:
+    Type: String
+    Description: AWS Secrets Manager secret name for database credentials
+
+  SNSTopicArn:
+    Type: String
+    Description: SNS topic ARN for alert notifications
+
+  FlaggedContentBucket:
+    Type: String
+    Description: S3 bucket for storing flagged content
+
+  BedrockModelId:
+    Type: String
+    Default: anthropic.claude-3-haiku-20240307-v1:0
+    Description: Bedrock model ID for AI analysis
+
+  AIUsageThreshold:
+    Type: String
+    Default: '0.6'
+    Description: Threshold for triggering AI analysis (0-1)
+
+  SeverityThreshold:
+    Type: String
+    Default: '3'
+    Description: Severity threshold for flagging content (1-10)
+
+  VpcSubnetIds:
+    Type: CommaDelimitedList
+    Description: List of subnet IDs for VPC configuration
+
+  VpcSecurityGroupIds:
+    Type: CommaDelimitedList
+    Description: List of security group IDs for VPC configuration
+
+Resources:
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: ContentModerationPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${DBSecretName}*'
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource: !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/${BedrockModelId}'
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:PutObjectAcl
+                Resource: !Sub '${FlaggedContentBucket}/*'
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref SNSTopicArn
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${FunctionName}*'
+
+  ContentModerationFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref FunctionName
+      Runtime: python3.9
+      Handler: profanity_check.lambda_handler
+      Code:
+        S3Bucket: !Ref S3Bucket
+        S3Key: !Ref S3Key
+      Layers:
+        - !Ref LayerArn
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 300
+      MemorySize: 512
+      Environment:
+        Variables:
+          DB_SECRET_NAME: !Ref DBSecretName
+          SNS_TOPIC_ARN: !Ref SNSTopicArn
+          FLAGGED_CONTENT_BUCKET: !Ref FlaggedContentBucket
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+          AI_USAGE_THRESHOLD: !Ref AIUsageThreshold
+          SEVERITY_THRESHOLD: !Ref SeverityThreshold
+      VpcConfig:
+        SubnetIds: !Ref VpcSubnetIds
+        SecurityGroupIds: !Ref VpcSecurityGroupIds
+      DeadLetterConfig:
+        TargetArn: !Ref DeadLetterQueue
+
+  ContentModerationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${FunctionName}'
+      RetentionInDays: 14
+
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${FunctionName}-dlq'
+      MessageRetentionPeriod: 1209600  # 14 days
+
+  ContentModerationAlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${FunctionName}-alarms'
+
+  HighErrorRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${FunctionName}-HighErrorRate'
+      AlarmDescription: 'High error rate for content moderation function'
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 600
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref FunctionName
+      AlarmActions:
+        - !Ref ContentModerationAlarmTopic
+
+  HighDurationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${FunctionName}-HighDuration'
+      AlarmDescription: 'High average duration for content moderation function'
+      MetricName: Duration
+      Namespace: AWS/Lambda
+      Statistic: Average
+      Period: 600
+      EvaluationPeriods: 2
+      Threshold: 120000  # 120 seconds in milliseconds
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref FunctionName
+      AlarmActions:
+        - !Ref ContentModerationAlarmTopic
+
+Outputs:
+  FunctionArn:
+    Description: 'ARN of the Lambda function'
+    Value: !GetAtt ContentModerationFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-FunctionArn'
+
+  FunctionName:
+    Description: 'Name of the Lambda function'
+    Value: !Ref ContentModerationFunction
+    Export:
+      Name: !Sub '${AWS::StackName}-FunctionName'
+
+  ExecutionRoleArn:
+    Description: 'ARN of the Lambda execution role'
+    Value: !GetAtt LambdaExecutionRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ExecutionRoleArn'
+
+  DeadLetterQueueUrl:
+    Description: 'URL of the dead letter queue'
+    Value: !Ref DeadLetterQueue
+    Export:
+      Name: !Sub '${AWS::StackName}-DeadLetterQueueUrl'
