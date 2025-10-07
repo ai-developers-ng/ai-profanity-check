@@ -8,7 +8,8 @@ import re
 from datetime import datetime
 
 # Profanity detection libraries
-from profanity_check import predict, predict_prob
+# Using alt-profanity-check (maintained fork compatible with modern scikit-learn)
+from alt_profanity_check import predict, predict_prob
 from better_profanity import profanity
 import nltk
 from nltk.sentiment import SentimentIntensityAnalyzer
@@ -337,7 +338,7 @@ class ProductionModerationService:
                 'profanity_probability': float(profanity_prob),
                 'confidence': float(profanity_prob) if is_profane else 1.0 - float(profanity_prob),
                 'method': 'ml_based',
-                'model': 'profanity-check'
+                'model': 'alt-profanity-check'
             }
             
         except Exception as e:

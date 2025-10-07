@@ -1,0 +1,24 @@
+# AWS SDK and utilities
+boto3>=1.35.80
+
+# Database
+PyMySQL>=1.1.1
+
+# Profanity detection - using alt-profanity-check (maintained fork compatible with modern scikit-learn)
+# The original profanity-check is incompatible with scikit-learn >= 0.24
+# Note: alt-profanity-check requires specific scikit-learn/joblib versions for model compatibility
+alt-profanity-check>=1.7.0.post1
+better-profanity>=0.7.0
+
+# NLP and ML libraries - latest stable versions compatible with Python 3.13
+# Using scikit-learn 1.6.1 for compatibility with alt-profanity-check models
+scikit-learn>=1.6.1,<1.8.0
+joblib>=1.4.2
+pandas>=2.2.3
+numpy>=1.26.4,<2.1.0
+
+# Natural language processing
+nltk>=3.9.1
+
+# Optional: for XML processing (already in Python stdlib, but specifying for clarity)
+# lxml>=5.3.0  # Uncomment if you need faster XML processing
